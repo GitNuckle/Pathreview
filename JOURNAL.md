@@ -23,3 +23,20 @@ Findings:
 - All three existing services already have `deploy.resources.limits.memory` set (db: 512M, redis: 256M, vector-db: 1G).
 - `git log --oneline -- docker-compose.yml` shows only two commits (scaffold + initial working app) — no dedicated "add memory limits" fix, meaning limits were present from the start.
 - Conclusion: the bug as described does not reproduce against current main. Commented on the issue to flag this and ask whether it's stale or whether a proxy service was expected to exist elsewhere.
+
+## Week 8 — Reproduction & solution planning
+
+**Reproduction commit link:** https://github.com/GitNuckle/Pathreview/commit/<paste-your-hash>
+
+**Reproduction summary:**
+Investigated docker-compose.yml and found no LLM proxy service currently defined, and all
+existing services (db, redis, vector-db) already have memory limits set. The bug as
+described in #130 does not reproduce against current main — flagged this on the issue.
+
+**PLAN.md link:** https://github.com/GitNuckle/Pathreview/blob/fix/130-docker-memory-limits/PLAN.md
+
+**Walkthrough video (recommended):** [not recorded]
+
+**Blockers or open questions:**
+Waiting to hear back on the issue about whether a proxy service was removed/never built,
+or whether this issue is stale. My plan branches depending on that answer.

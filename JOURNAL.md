@@ -26,7 +26,7 @@ Findings:
 
 ## Week 8 — Reproduction & solution planning
 
-**Reproduction commit link:** https://github.com/GitNuckle/Pathreview/commit/<paste-your-hash>
+**Reproduction commit link:** https://github.com/GitNuckle/Pathreview/commit/fed26f1 
 
 **Reproduction summary:**
 Investigated docker-compose.yml and found no LLM proxy service currently defined, and all

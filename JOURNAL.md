@@ -14,3 +14,12 @@ The project's docker-compose.yml starts an LLM proxy container without any memor
 **Setup confirmation:** [ ] App runs locally at localhost:5173
 
 **Cohort ledger:** [ ] Issue added to cohort ledger
+
+## Reproduction notes (issue #130)
+
+Investigated docker-compose.yml on current main (forked before any fix was merged).
+Findings:
+- No LLM proxy service exists in docker-compose.yml — only `db`, `redis`, and `vector-db` are defined.
+- All three existing services already have `deploy.resources.limits.memory` set (db: 512M, redis: 256M, vector-db: 1G).
+- `git log --oneline -- docker-compose.yml` shows only two commits (scaffold + initial working app) — no dedicated "add memory limits" fix, meaning limits were present from the start.
+- Conclusion: the bug as described does not reproduce against current main. Commented on the issue to flag this and ask whether it's stale or whether a proxy service was expected to exist elsewhere.

@@ -1,42 +1,101 @@
 ## Week 7 — Issue selection
 
-**Issue link:** https://github.com/ascherj/pathreview/issues/130
+**Issue link:** https://github.com/ascherj/pathreview/issues/148
 
-**Issue title:** Docker doesn't set memory limits, causing all RAM to be used on low-memory machines
+**Issue title:** Skill extractor fails to detect JavaScript and TypeScript
 
-**Tier:** [ ] Tier 1  [ ] Tier 2  [ ] Tier 3
+**Tier:** [x] Tier 1  [ ] Tier 2  [ ] Tier 3
 
 **Problem summary:**
-The project's docker-compose.yml starts an LLM proxy container without any memory limit configured, so it can consume as much RAM as the host machine has available. On lower-end development machines (around 8GB of RAM), this causes the container to use up nearly all available memory, which leads the operating system to kill other running services (OOM kill) instead of the proxy handling the limit gracefully. The fix involves adding resource constraints (such as mem_limit or a deploy.resources.limits block, depending on the Compose version) to the LLM proxy service definition, sized to the project's minimum supported hardware. This is a Docker Compose configuration change, not an application code change, so success means the proxy still runs correctly under the new memory limit.
+`extract_skills()` in `ingestion/parsers/skill_extractor.py` returns no detections at
+all for text that clearly describes JavaScript work, and for TypeScript samples
+(mentioning `.tsx`/`.ts` files and the word TypeScript) it detects only `React`.
+Python, DevOps, and database detection all work correctly in the same file, so this is
+isolated to the JS/TS-specific logic inside `_detect_languages()`. The fix is scoped to
+a single file (`skill_extractor.py`) and its corresponding test file, with four
+previously-failing tests named directly in the issue: `test_javascript_detection`,
+`test_text_with_typescript_files`, `test_devops_tool_detection`, and
+`test_docker_compose_detection`.
 
-**Branch name:** fix/130-docker-memory-limits
+**Branch name:** fix/148-skill-extractor-js-ts
 
-**Setup confirmation:** [ ] App runs locally at localhost:5173
+**Setup confirmation:** [x] App runs locally
 
-**Cohort ledger:** [ ] Issue added to cohort ledger
+**Cohort ledger:** [x] Issue added to cohort ledger
 
-## Reproduction notes (issue #130)
-
-Investigated docker-compose.yml on current main (forked before any fix was merged).
-Findings:
-- No LLM proxy service exists in docker-compose.yml — only `db`, `redis`, and `vector-db` are defined.
-- All three existing services already have `deploy.resources.limits.memory` set (db: 512M, redis: 256M, vector-db: 1G).
-- `git log --oneline -- docker-compose.yml` shows only two commits (scaffold + initial working app) — no dedicated "add memory limits" fix, meaning limits were present from the start.
-- Conclusion: the bug as described does not reproduce against current main. Commented on the issue to flag this and ask whether it's stale or whether a proxy service was expected to exist elsewhere.
+**Note:** Previously claimed and documented issue #130 (Docker memory limits) for
+Weeks 7-8, but investigation showed the bug did not reproduce against current main (no
+LLM proxy service exists in `docker-compose.yml`, and existing services already had
+memory limits configured). Switched to issue # 148 for Week 9 submission since it
+reproduces cleanly and is well-scoped to a single file.
 
 ## Week 8 — Reproduction & solution planning
 
-**Reproduction commit link:** https://github.com/GitNuckle/Pathreview/commit/fed26f1 
+**Reproduction commit link:** N/A
 
-**Reproduction summary:**
-Investigated docker-compose.yml and found no LLM proxy service currently defined, and all
-existing services (db, redis, vector-db) already have memory limits set. The bug as
-described in #130 does not reproduce against current main — flagged this on the issue.
+**Reproduction notes:**
+Ran the issue's two examples directly against `extract_skills()`:
+```python
+e.extract_skills('Wrote index.js using const arrow functions and async/await callbacks')
+# -> [] (matches issue's reported observed output)
 
-**PLAN.md link:** https://github.com/GitNuckle/Pathreview/blob/fix/130-docker-memory-limits/PLAN.md
+[d.name for d in e.extract_skills('Built app.tsx and types.ts with strict TypeScript interfaces')]
+# -> ['React'] (matches issue's reported observed output)
+```
+Both matched the issue's "observed" output exactly, confirming the bug reproduces
+cleanly on current main.
+
+Read through `_detect_languages()` line by line to find the actual root cause:
+- JS/TS detection is almost entirely gated on a `filename` argument, which is `None`
+  in both repro calls.
+- The only text-based JS check, `re.search(r"\b(import|require)\s+", text)`, requires
+  whitespace after the keyword and neither example uses `import`/`require` at all —
+  they use `const`, arrow syntax, and `async`/`await`, none of which are checked
+  anywhere in the method.
+- `JS_TS_KEYWORDS` is defined as a class attribute but never referenced in the method
+  body — dead code, and the actual root cause.
+- TypeScript is only ever assigned via `.ts` in `filename`; there's no content-based
+  TS signal at all.
+- React "detects" on the second example only because `.tsx` is a literal string in
+  `REACT_INDICATORS` and happens to appear directly in the input text.
+
+**PLAN.md link:** [https://github.com/GitNuckle/Pathreview/blob/148-skill-extractor/PLAN.md]
 
 **Walkthrough video (recommended):** [not recorded]
 
-**Blockers or open questions:**
-Waiting to hear back on the issue about whether a proxy service was removed/never built,
-or whether this issue is stale. My plan branches depending on that answer.
+**Blockers or open questions:** None — issue reproduces cleanly and root cause is clear from reading the code directly.
+
+## Week 9 — Solution building & PR submission
+
+**Implementation summary:**
+Rewrote the JavaScript evidence checks in `_detect_languages()` to look at real syntax
+in the text itself (`require(...)` including no-space calls, `import ... from ...`,
+`export` statements, arrow function syntax, `async`/`await` usage), plus a literal
+"javascript"/`.js`/`.jsx` mention check for plain-text descriptions. Added a fully
+independent TypeScript evidence check (`interface` declarations, type annotations,
+literal "typescript" mention, `.ts`/`.tsx` mentioned in text) so JavaScript and
+TypeScript are detected independently rather than as a mutually exclusive label —
+necessary because a real `.tsx` file legitimately has both.
+
+Deliberately avoided switching to raw keyword-membership checks against
+`JS_TS_KEYWORDS` (e.g. "does `let` or `class` appear anywhere in the text") after
+testing that approach against a plain English sentence ("Let's go to class together")
+and confirming it would false-positive. Kept every check structural (regex requiring
+real syntax shape) instead.
+
+**Tests added:** 4 new tests in `tests/unit/test_skill_extractor.py` — the issue's two
+exact repro examples, a negative test for plain English containing JS/TS keywords, and
+a realistic `.tsx` file test expecting both React and TypeScript. Ran all four locally
+against the fixed implementation before adding them to the suite — all passed.
+
+**Known limitation found but not fixed (flagged for reviewers):** The pre-existing
+Python import check (`re.search(r"\bimport\s+\w+", text)`) also matches JS/TS
+`import ... from` statements, since it doesn't check for the trailing `from`. This
+predates this PR and is unrelated to # 148, so it was left as-is and noted in the PR
+description rather than expanding scope.
+
+**PR link:** [to be added after opening PR]
+
+**Self-review checklist:** [x] `make test-unit` passes for touched files
+[ ] `make lint` / `make typecheck` — pass on touched file individually; repo-wide
+pre-existing issues unrelated to this change were not addressed, per scope.

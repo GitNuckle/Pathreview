@@ -1,53 +1,78 @@
 ## Solution plan
 
-**Issue:** Docker doesn't set memory limits, causing all RAM to be used on low-memory machines (#130)
-https://github.com/ascherj/pathreview/issues/130
+**Issue:** Skill extractor fails to detect JavaScript and TypeScript (#148)
+https://github.com/ascherj/pathreview/issues/148
 
 ### Understand
-The issue describes an LLM proxy container in docker-compose.yml with no memory limit,
-risking OOM kills on 8GB machines. On investigation, no LLM proxy service currently exists
-in docker-compose.yml, and the three services that do exist (db, redis, vector-db) already
-have deploy.resources.limits.memory configured. Expected behavior per the issue: every
-service, including an LLM proxy, has a bounded memory limit. Actual behavior: no proxy
-service is present to constrain, and existing services are already compliant.
+`extract_skills()` in `ingestion/parsers/skill_extractor.py` is supposed to detect
+programming languages, frameworks, tools, and databases from resume/repo text. Python,
+DevOps, and database detection all work correctly, but JavaScript and TypeScript
+detection is effectively broken. Running the issue's own examples confirms this:
+`extract_skills('Wrote index.js using const arrow functions and async/await callbacks')`
+returns `[]` instead of `JavaScript`, and
+`extract_skills('Built app.tsx and types.ts with strict TypeScript interfaces')` returns
+only `['React']` instead of also including `TypeScript`. Expected behavior: real JS/TS
+syntax and plain-text mentions of JavaScript/TypeScript (filenames, extensions, the words
+themselves) should be detected as evidence, the same way Python detection already checks
+for `import`, `def`, and type annotations directly in the text. Actual behavior: JS/TS
+detection is almost entirely gated on a `filename` argument that's frequently not
+provided, and the one text-based check that exists is too narrow to catch common syntax.
 
 ### Map
-- docker-compose.yml — the file the issue references directly
-- scripts/issues_manifest.json — may contain metadata on issue status/history
-- Any backend code referencing an LLM proxy (e.g. OPENROUTER_API_KEY usage) to confirm
-  whether a proxy is meant to run as its own container or is handled differently now
+- `ingestion/parsers/skill_extractor.py` — contains `_detect_languages()`, the method
+  directly responsible for the bug, plus `JS_TS_KEYWORDS`, a class attribute that's
+  defined but never referenced anywhere in the file
+- `tests/unit/test_skill_extractor.py` — existing test suite; contains
+  `test_javascript_detection`, `test_text_with_typescript_files`,
+  `test_devops_tool_detection`, and `test_docker_compose_detection`, which the issue
+  lists as currently failing
+- `_detect_react()` and `REACT_INDICATORS` — not buggy themselves, but relevant context
+  since `.tsx` being a literal React indicator is why TypeScript examples currently
+  return `React` at all
 
 ### Plan
-1. Confirm with the issue author / instructor whether this issue is stale or whether a
-   proxy container was removed/refactored since the issue was filed.
-2. If a proxy service should exist: add it to docker-compose.yml with an explicit
-   deploy.resources.limits.memory block sized for 8GB minimum hardware (target ~1-1.5G,
-   matching vector-db's precedent).
-3. If no proxy container is required going forward: propose closing the issue with a
-   comment explaining current state, or update docs to clarify LLM calls are proxied
-   without a dedicated container.
-4. Either way, verify all services in docker-compose.yml have consistent memory limits
-   as a general hardening pass, since that's the actual spirit of the issue.
-5. Re-run `docker compose up -d` and confirm all containers start and stay within limits
-   (`docker stats`) on an 8GB-equivalent constraint.
+1. Reproduce both of the issue's examples locally against `extract_skills()` and confirm
+   they match the "observed" output in the issue exactly.
+2. Read `_detect_languages()` line by line to find the actual root cause rather than
+   assuming from the issue description alone.
+3. Rewrite the JavaScript evidence checks to look at real syntax in the text itself
+   (import/require — including `require('fs')` with no space, `export` statements,
+   arrow function syntax, `async`/`await`), plus a literal "javascript" / `.js`/`.jsx`
+   mention check, since the issue's own examples describe files in plain English rather
+   than pasting real code.
+4. Add a fully independent TypeScript evidence check (interface declarations, type
+   annotations, literal "typescript" mention, `.ts`/`.tsx` mentioned in text) so
+   TypeScript no longer depends solely on a `.ts` filename, and so a `.tsx` file can
+   correctly produce both JavaScript and TypeScript rather than one or the other.
+5. Add tests: the issue's two exact examples, a negative test confirming plain English
+   sentences containing words like "class" or "let" are not falsely flagged as code, and
+   a realistic `.tsx` file test expecting both React and TypeScript.
+6. Run `make test-unit`, `make lint`, and `make typecheck` scoped to the touched file and
+   confirm the four previously-failing tests listed in the issue now pass.
 
 ### Inputs & outputs
-Input: current docker-compose.yml, clarification from maintainer/instructor on whether
-a proxy service is expected. Output: either a docker-compose.yml diff adding a properly
-limited proxy service, or a documented resolution/close-out if the issue is stale.
+Input: current `ingestion/parsers/skill_extractor.py`, the issue's two repro examples,
+the existing test file's conventions. Output: an updated `_detect_languages()` method
+with independent JavaScript and TypeScript evidence checks, four new/updated tests in
+`tests/unit/test_skill_extractor.py`, and a PR closing # 148.
 
 ### Risks & unknowns
-- Unsure whether "LLM proxy" refers to a container that was planned but never built, or
-  one that existed and was removed in a refactor — need maintainer input before writing
-  code, to avoid solving a problem that doesn't exist.
-- If I add a new service, I risk guessing wrong about what it should run (image, port,
-  env vars) without more context from the codebase or issue author.
-- Memory limits that are too low could cause the added service to crash/OOM itself;
-  need to pick a reasonable value and test it under load.
+- Broadening detection too aggressively (e.g. matching on bare keyword membership like
+  "does `let` or `class` appear anywhere") risks false positives on plain English text —
+  need to keep every check structural (regex requiring real syntax shape), not
+  bag-of-words matching.
+- `JS_TS_KEYWORDS` exists as unused class data; unclear if it was meant to be used
+  differently (e.g. a scoring/weighting approach) than what I'm implementing — proceeding
+  with explicit regex checks since that matches the existing pattern used for Python
+  detection in the same method.
+- The pre-existing Python import check (`re.search(r"\bimport\s+\w+", text)`) will also
+  match JS `import ... from` statements — a pre-existing false positive unrelated to
+  # 148 that I'm flagging for reviewers rather than fixing, to keep this PR scoped.
 
 ### Edge cases
-- Host machine at exactly 8GB — limits need enough headroom for db+redis+vector-db+proxy
-  to coexist without exceeding total RAM.
-- Proxy container restarting repeatedly due to memory limit being too strict (crash loop).
-- Docker Desktop's own overhead on Windows/WSL2 reducing effectively available memory
-  further than raw host RAM.
+- A `.tsx` file that is valid JS and also has TS-specific syntax (interfaces, type
+  annotations) should detect both JavaScript and TypeScript, not just one.
+- Plain English sentences containing JS/TS keywords as ordinary words (e.g. "let's go to
+  class") should not trigger any language detection.
+- Text with no filename at all (as in both of the issue's repro examples) must still be
+  detectable from syntax/literal-word evidence alone.

@@ -12,10 +12,13 @@ Closes #148
 - Added 4 tests covering the issue's two examples, a plain-English false-positive guard, and a `.tsx` file test expecting both React and TypeScript
 
 ## Testing
-- [x] Unit tests pass locally for the touched file
-- [ ] Integration tests — not run, unit-level fix
-- [ ] Full repo lint/typecheck — not run against full repo; touched file passes individually
-- [x] New/updated tests cover the changes
+ Unit tests pass — all 4 new tests for issue Skill extractor fails to detect JavaScript and TypeScript #148 pass
+ Full test file — 3 pre-existing tests fail (test_database_technology_detection,
+test_devops_tool_detection, test_docker_compose_detection); the latter two are
+Docker/DevOps gaps outside this fix's JS/TS scope
+ Integration tests — not run, unit-level fix
+ Lint/typecheck — not run (make unavailable on Windows)
+ New/updated tests cover the changes
 
 ## Notes for Reviewers
 Branch name is left over from an earlier issue (#130) I initially worked on before switching to #148 — the diff reflects #148 only.
